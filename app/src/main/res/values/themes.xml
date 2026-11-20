@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="pp_background">#FF0D1117</color>
+    <color name="pp_primary">#FF10B981</color>
+
+    <style name="Theme.PitchPulse" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/pp_background</item>
+        <item name="android:statusBarColor">@color/pp_background</item>
+        <item name="android:navigationBarColor">@color/pp_background</item>
+        <item name="android:colorAccent">@color/pp_primary</item>
+    </style>
+</resources>

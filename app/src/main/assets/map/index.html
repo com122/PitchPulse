@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
+    <link rel="stylesheet" href="leaflet.css"/>
+    <style>
+        html, body, #map { margin: 0; padding: 0; width: 100%; height: 100%; background: #0D1117; }
+        .leaflet-container { background: #0D1117; cursor: crosshair; }
+        .pp-label {
+            background: #10B981; color: #0D1117; border: none; border-radius: 10px;
+            font: bold 12px monospace; padding: 1px 6px; box-shadow: none;
+        }
+        .pp-label:before { display: none; }
+    </style>
+    <script src="leaflet.js"></script>
+</head>
+<body>
+<div id="map"></div>
+<script>
+(function () {
+    var bridge = window.Android || {
+        onReady: function () {}, onMapClick: function () {}, onTileStatus: function () {}
+    };
+
+    var layers = {
+        esri: L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+            maxNativeZoom: 19, maxZoom: 21, attribution: 'Esri World Imagery'
+        }),
+        osm: L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxNativeZoom: 19, maxZoom: 21, attribution: '&copy; OpenStreetMap contributors'
+        }),
+        amap: L.tileLayer('https://webst0{s}.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}', {
+            subdomains: '1234', maxNativeZoom: 18, maxZoom: 21, attribution: '高德卫星 (GCJ-02)'
+        })
+    };
+
+    var map = L.map('map', { zoomControl: true, attributionControl: true, doubleClickZoom: false })
+        .setView([22.5431, 113.9420], 18);
+
+    var currentLayerId = null;
+    var loaded = 0, errors = 0, reported = null;
+
+    function resetCounters() { loaded = 0; errors = 0; reported = null; }
+    function report(ok) {
+        if (reported === ok) return;
+        reported = ok;
+        bridge.onTileStatus(ok, errors);
+    }
+
+    Object.keys(layers).forEach(function (id) {
+        layers[id].on('tileload', function () {
+            if (id !== currentLayerId) return;
+            loaded++;
+            report(true);
+        });
+        layers[id].on('tileerror', function () {
+            if (id !== currentLayerId) return;
+            errors++;
+            if (loaded === 0 && errors >= 6) report(false);
+        });
+    });
+
+    var overlay = L.layerGroup().addTo(map);
+
+    map.on('click', function (e) {
+        bridge.onMapClick(e.latlng.lat, e.latlng.lng, currentLayerId || 'esri');
+    });
+
+    window.PP = {
+        setLayer: function (id) {
+            if (!layers[id] || id === currentLayerId) return;
+            if (currentLayerId) map.removeLayer(layers[currentLayerId]);
+            currentLayerId = id;
+            resetCounters();
+            layers[id].addTo(map);
+            layers[id].bringToBack();
+        },
+        setView: function (lat, lng, zoom) {
+            map.setView([lat, lng], zoom || map.getZoom());
+        },
+        /**
+         * state = { corners: [[lat,lng],...], rect: [[lat,lng] x4] | null, center: [lat,lng] | null }
+         * All coordinates are already in the display datum of the current layer.
+         */
+        setOverlay: function (state) {
+            overlay.clearLayers();
+            if (!state) return;
+            if (state.rect && state.rect.length === 4) {
+                L.polygon(state.rect, {
+                    color: '#10B981', weight: 3, fillColor: '#10B981', fillOpacity: 0.18
+                }).addTo(overlay);
+                var r = state.rect;
+                // Halfway line between the two short sides.
+                var m1 = [(r[0][0] + r[3][0]) / 2, (r[0][1] + r[3][1]) / 2];
+                var m2 = [(r[1][0] + r[2][0]) / 2, (r[1][1] + r[2][1]) / 2];
+                L.polyline([m1, m2], { color: '#10B981', weight: 2, dashArray: '6 6' }).addTo(overlay);
+            }
+            if (state.center) {
+                L.circleMarker(state.center, {
+                    radius: 5, color: '#FBBF24', weight: 2, fillColor: '#FBBF24', fillOpacity: 1
+                }).addTo(overlay);
+            }
+            (state.corners || []).forEach(function (c, i) {
+                L.circleMarker(c, {
+                    radius: 7, color: '#FFFFFF', weight: 2, fillColor: '#10B981', fillOpacity: 1
+                }).bindTooltip(String(i + 1), {
+                    permanent: true, direction: 'top', className: 'pp-label', offset: [0, -6]
+                }).addTo(overlay);
+            });
+            lastRect = (state.rect && state.rect.length === 4) ? state.rect : null;
+        },
+        /** Zooms the map to the current pitch rectangle. */
+        fit: function () {
+            if (lastRect) map.fitBounds(L.latLngBounds(lastRect).pad(0.25), { maxZoom: 19 });
+        }
+    };
+    var lastRect = null;
+
+    bridge.onReady();
+})();
+</script>
+</body>
+</html>
