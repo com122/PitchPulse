@@ -19,6 +19,8 @@ Android 手机端（Kotlin + Jetpack Compose + Material 3 + MVVM + Coroutines/Fl
 # 输出: app/build/outputs/apk/debug/app-debug.apk
 ```
 
+现成的 APK：GitHub Actions（`.github/workflows/android.yml`）每次推送 `main` 都会构建，APK 在 Actions 运行页的 Artifacts 里；发布 Release 时还会自动把 APK 挂到该 Release 的附件中。
+
 不依赖任何需要 API Key 的商业 SDK。Leaflet 1.9.4 已打包进 `assets/map`（BSD-2 许可，见 `LICENSE-leaflet.txt`），瓦片来自 Esri World Imagery / OpenStreetMap / 高德卫星 XYZ 地址，装好即可用。
 
 ## 功能
