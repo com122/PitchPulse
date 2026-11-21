@@ -155,12 +155,30 @@ class MatchStatsCalculator(private val config: Config = Config()) {
     /**
      * Full analysis. When [phase] is 1 or 2 only that half is analysed; null means the whole match.
      */
-    fun analyze(points: List<TrackPoint>, phase: Int? = null): MatchAnalysis {
-        val allClean = clean(points)
+    fun analyze(points: List<TrackPoint>, phase: Int? = null): MatchAnalysis =
+        analyzeFromClean(points, clean(points), phase)
+
+    /**
+     * Statistics from already-cleaned points (e.g. the Kalman-smoothed track). [raw] is only used
+     * for the 5-minute block boundaries; [allClean] must be sorted by time and exclude p == 0.
+     */
+    fun analyzeFromClean(raw: List<TrackPoint>, allClean: List<CleanPoint>, phase: Int? = null): MatchAnalysis {
         val clean = if (phase == null) allClean else allClean.filter { it.point.p == phase }
             .mapIndexed { i, c -> if (i == 0 && !c.segmentStart) c.copy(segmentStart = true, rawStepMeters = 0f, countedStepMeters = 0f, dtMs = 0) else c }
-        return analyzeClean(points, clean)
+        return analyzeClean(raw, clean)
     }
+
+    /** Distance counted for a step under the anti-jitter rule. */
+    fun countedStep(stepMeters: Double, dtMs: Long): Double =
+        if (dtMs <= 0 || stepMeters / (dtMs / 1000.0) < config.minDisplacementPerSecond) 0.0 else stepMeters
+
+    val sprintSpeedMs: Float get() = config.sprintSpeedMs
+    val maxPlausibleSpeedMs: Float get() = config.maxPlausibleSpeedMs
+    val sprintMinDurationMs: Long get() = config.sprintMinDurationMs
+    val maxAccuracyMeters: Float get() = config.maxAccuracyMeters
+
+    /** Sprint runs over clean points (same rule as [analyze]). */
+    fun sprints(clean: List<CleanPoint>): List<SprintRun> = detectSprints(clean)
 
     private fun analyzeClean(raw: List<TrackPoint>, clean: List<CleanPoint>): MatchAnalysis {
         var distance = 0.0

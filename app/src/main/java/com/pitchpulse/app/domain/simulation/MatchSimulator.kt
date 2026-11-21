@@ -15,6 +15,19 @@ import kotlin.math.sin
 import kotlin.math.sqrt
 import kotlin.random.Random
 
+/** Error-free sample of a simulated player. [t] is GNSS-UTC time. */
+data class TruthSample(
+    val t: Long,
+    val lat: Double,
+    val lng: Double,
+    /** Position in pitch meters: x along the length from the nx = 0 goal line, y across. */
+    val x: Double,
+    val y: Double,
+    val speed: Double,
+    val hr: Int,
+    val phase: Int,
+)
+
 /**
  * Generates a full 90-minute, 1 Hz match for one player around a calibrated pitch.
  *
@@ -28,7 +41,10 @@ import kotlin.random.Random
  * - Acceleration-limited kinematics, fatigue in the second half, 15-minute half-time off the pitch,
  *   and teams switch ends at half-time.
  * - Heart rate follows a first-order response to running load with cardiac drift.
- * - GPS noise: AR(1) correlated 2–4 m error plus occasional low-accuracy fixes and position jumps.
+ *
+ * [generateTruth] returns the error-free trajectory; [generate] adds the original wrist-GNSS noise
+ * model (AR(1) correlated 2–4 m error plus occasional low-accuracy fixes and position jumps).
+ * [GnssErrorSimulator] adds the reference-station error model (shared + independent errors).
  */
 class MatchSimulator(private val random: Random = Random.Default) {
 
@@ -58,12 +74,20 @@ class MatchSimulator(private val random: Random = Random.Default) {
             doubleArrayOf(0.18, 0.37, 0.26, 0.11, 0.08))
     }
 
+    /** Original simulator output: truth + the legacy wrist-GNSS noise model. */
     fun generate(
         pitch: PitchConfig,
         position: PlayerPosition,
         settings: UserSettings,
         kickoffMillis: Long,
-    ): List<TrackPoint> {
+    ): List<TrackPoint> = applyLegacyNoise(generateTruth(pitch, position, settings, kickoffMillis))
+
+    fun generateTruth(
+        pitch: PitchConfig,
+        position: PlayerPosition,
+        settings: UserSettings,
+        kickoffMillis: Long,
+    ): List<TruthSample> {
         val projector = PitchProjector(pitch)
         val length = pitch.lengthMeters.toDouble()
         val width = pitch.widthMeters.toDouble()
@@ -74,10 +98,9 @@ class MatchSimulator(private val random: Random = Random.Default) {
         val halfTime = 15 * 60
         val half2 = (45 + random.nextInt(1, 5)) * 60
 
-        val gpsSigma = random.nextDouble(2.0, 4.0)
         val hrBaseline = random.nextDouble(-0.03, 0.03)
 
-        val out = ArrayList<TrackPoint>(half1 + halfTime + half2 + 10)
+        val out = ArrayList<TruthSample>(half1 + halfTime + half2 + 10)
 
         // Player state in pitch meters (x along length, y across width).
         var x = role.anchorX * length
@@ -87,8 +110,6 @@ class MatchSimulator(private val random: Random = Random.Default) {
         var teamX = 0.0
         var ballY = 0.5
         var exertion = 0.35
-        var noiseE = gaussian() * gpsSigma
-        var noiseN = gaussian() * gpsSigma
 
         var mode = Mode.STAND
         var modeSpeed = 0.0
@@ -110,42 +131,8 @@ class MatchSimulator(private val random: Random = Random.Default) {
             val reserve = (settings.maxHr - settings.restingHr).toDouble()
             val hr = (settings.restingHr + reserve * (exertion + hrBaseline) + gaussian() * 1.5)
                 .coerceIn(settings.restingHr + 10.0, settings.maxHr - 1.0)
-
-            // GPS: AR(1) correlated noise. rho = 0.995 gives a slowly wandering 2–4 m error with
-            // ~0.4 m step-to-step change, similar to a wrist GNSS receiver.
-            val rho = 0.995
-            val k = sqrt(1 - rho * rho) * gpsSigma
-            noiseE = rho * noiseE + k * gaussian()
-            noiseN = rho * noiseN + k * gaussian()
-
             val ll = projector.denormalize(x / length, y / width)
-            var lat = ll[0]
-            var lng = ll[1]
-            var acc = (gpsSigma * 1.2 + kotlin.math.abs(gaussian()) * 0.6).toFloat()
-            // Convert local noise (meters) into degrees around this point.
-            val mPerDegLat = 111_132.0
-            val mPerDegLng = 111_320.0 * cos(Math.toRadians(lat))
-            var extraE = noiseE
-            var extraN = noiseN
-            val roll = random.nextDouble()
-            if (roll < 0.004) {
-                // Poor fix: flagged by accuracy.
-                acc = random.nextDouble(16.0, 30.0).toFloat()
-                extraE += gaussian() * 12
-                extraN += gaussian() * 12
-            } else if (roll < 0.006) {
-                // Multipath jump with a plausible accuracy value: must be caught by the speed filter.
-                val ang = random.nextDouble(0.0, 2 * PI)
-                val dist = random.nextDouble(25.0, 60.0)
-                extraE += cos(ang) * dist
-                extraN += sin(ang) * dist
-            }
-            lat += extraN / mPerDegLat
-            lng += extraE / mPerDegLng
-
-            val speed = hypot(vx, vy)
-            val spd = max(0.0, speed + gaussian() * 0.12).toFloat()
-            out += TrackPoint(t = t, lat = lat, lng = lng, acc = acc, spd = spd, hr = hr.toInt(), p = phase)
+            out += TruthSample(t, ll[0], ll[1], x, y, hypot(vx, vy), hr.toInt(), phase)
             t += 1000
         }
 
@@ -161,6 +148,12 @@ class MatchSimulator(private val random: Random = Random.Default) {
             val scale = if (dv > accel) accel / dv else 1.0
             vx += dvx * scale
             vy += dvy * scale
+            // With 1 s steps the braking rule alone overshoots and oscillates around the target.
+            val sp = hypot(vx, vy)
+            if (sp > dist) {
+                val f = dist / sp
+                vx *= f; vy *= f
+            }
             x = (x + vx).coerceIn(-3.0, length + 3.0)
             y = (y + vy).coerceIn(-3.0, width + 3.0)
         }
@@ -236,7 +229,9 @@ class MatchSimulator(private val random: Random = Random.Default) {
 
         fun halfTimeBreak(seconds: Int) {
             val benchX = length * 0.5 + random.nextDouble(-8.0, 8.0)
-            val benchY = -width * 0.12
+            // Bench 2.5 m outside the touchline (inside the ±3 m position clamp, so the player can
+            // actually arrive and stand still).
+            val benchY = -2.5
             mode = Mode.STAND
             for (s in 0 until seconds) {
                 val goingBack = s > seconds - 60
@@ -255,6 +250,40 @@ class MatchSimulator(private val random: Random = Random.Default) {
         halfTimeBreak(halfTime)
         playHalf(half2, TrackPoint.PHASE_SECOND_HALF)
         return out
+    }
+
+    /** Legacy wrist-GNSS noise: AR(1) 2–4 m wander, 0.4 % poor fixes (acc > 15 m), 0.2 % jumps of 25–60 m. */
+    fun applyLegacyNoise(truth: List<TruthSample>): List<TrackPoint> {
+        val gpsSigma = random.nextDouble(2.0, 4.0)
+        var noiseE = gaussian() * gpsSigma
+        var noiseN = gaussian() * gpsSigma
+        val rho = 0.995
+        val k = sqrt(1 - rho * rho) * gpsSigma
+        return truth.map { s ->
+            noiseE = rho * noiseE + k * gaussian()
+            noiseN = rho * noiseN + k * gaussian()
+            var acc = (gpsSigma * 1.2 + kotlin.math.abs(gaussian()) * 0.6).toFloat()
+            val mPerDegLat = 111_132.0
+            val mPerDegLng = 111_320.0 * cos(Math.toRadians(s.lat))
+            var extraE = noiseE
+            var extraN = noiseN
+            val roll = random.nextDouble()
+            if (roll < 0.004) {
+                acc = random.nextDouble(16.0, 30.0).toFloat()
+                extraE += gaussian() * 12
+                extraN += gaussian() * 12
+            } else if (roll < 0.006) {
+                val ang = random.nextDouble(0.0, 2 * PI)
+                val dist = random.nextDouble(25.0, 60.0)
+                extraE += cos(ang) * dist
+                extraN += sin(ang) * dist
+            }
+            val spd = max(0.0, s.speed + gaussian() * 0.12).toFloat()
+            TrackPoint(
+                t = s.t, lat = s.lat + extraN / mPerDegLat, lng = s.lng + extraE / mPerDegLng,
+                acc = acc, spd = spd, hr = s.hr, p = s.phase,
+            )
+        }
     }
 
     private fun pickMode(weights: DoubleArray, fatigue: Double): Mode {
