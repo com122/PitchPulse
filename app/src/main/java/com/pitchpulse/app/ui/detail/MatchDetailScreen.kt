@@ -198,6 +198,17 @@ private fun DetailContent(state: MatchDetailUiState, viewModel: MatchDetailViewM
             Spacer(Modifier.height(12.dp))
 
             SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                TrackMode.entries.forEachIndexed { i, mode ->
+                    SegmentedButton(
+                        selected = state.mode == mode,
+                        onClick = { viewModel.selectMode(mode) },
+                        shape = SegmentedButtonDefaults.itemShape(i, TrackMode.entries.size),
+                        colors = segColors(),
+                    ) { Text(if (mode == TrackMode.ENHANCED && state.report == null && state.enhancementError == null) "增强（计算中）" else "${mode.label}轨迹") }
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
                 MatchSegment.entries.forEachIndexed { i, seg ->
                     SegmentedButton(
                         selected = state.segment == seg,
@@ -240,7 +251,7 @@ private fun DetailContent(state: MatchDetailUiState, viewModel: MatchDetailViewM
         }
 
         // Metrics 2 x 3
-        SectionCard(title = "核心指标 · ${state.segment.label}") {
+        SectionCard(title = "核心指标 · ${state.segment.label} · ${if (state.mode == TrackMode.ENHANCED && state.enhancedFullStats != null) "增强" else "原始"}") {
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 StatTile("总里程", Formatters.km(s.totalDistanceMeters), "km", Modifier.weight(1f), PP.Grass)
                 StatTile("均心率", if (s.avgHr > 0) s.avgHr.toString() else "--", "bpm", Modifier.weight(1f))
@@ -259,6 +270,14 @@ private fun DetailContent(state: MatchDetailUiState, viewModel: MatchDetailViewM
                 style = MaterialTheme.typography.labelSmall, color = PP.Muted,
             )
         }
+
+        AccuracyReportCard(
+            report = state.report,
+            error = state.enhancementError,
+            rawStats = state.rawFullStats,
+            enhancedStats = state.enhancedFullStats,
+            overlap = state.referenceOverlap,
+        )
 
         SectionCard(title = "心率区间分布 · 最大心率 ${state.settings.maxHr} bpm") {
             if (s.hrZones.totalMs == 0L) {

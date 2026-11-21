@@ -66,6 +66,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.pitchpulse.app.data.model.MatchRecord
 import com.pitchpulse.app.data.model.PitchConfig
 import com.pitchpulse.app.data.model.PlayerPosition
+import com.pitchpulse.app.data.repository.ImportRepository
 import com.pitchpulse.app.domain.algorithm.PitchMarkings
 import com.pitchpulse.app.ui.components.PitchCanvas
 import com.pitchpulse.app.ui.components.Tag
@@ -158,9 +159,9 @@ fun MatchesScreen(viewModel: MatchesViewModel, onOpenMatch: (String) -> Unit) {
         SimulationDialog(
             pitches = state.pitches,
             onDismiss = { showSimDialog = false },
-            onConfirm = { pitchId, position ->
+            onConfirm = { pitchId, position, kind ->
                 showSimDialog = false
-                viewModel.simulate(pitchId, position)
+                viewModel.simulate(pitchId, position, kind)
             },
         )
     }
@@ -302,10 +303,11 @@ private fun BusyOverlay(message: String) {
 private fun SimulationDialog(
     pitches: List<PitchConfig>,
     onDismiss: () -> Unit,
-    onConfirm: (String, PlayerPosition) -> Unit,
+    onConfirm: (String, PlayerPosition, ImportRepository.SimulationKind) -> Unit,
 ) {
     var pitchId by rememberSaveable { mutableStateOf(pitches.firstOrNull()?.id) }
     var position by rememberSaveable { mutableStateOf(PlayerPosition.MIDFIELDER) }
+    var kind by rememberSaveable { mutableStateOf(ImportRepository.SimulationKind.PLAIN) }
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = PP.Card,
@@ -316,10 +318,25 @@ private fun SimulationDialog(
                     "围绕所选球场生成 90 分钟 1Hz 完整比赛：含位置跑位偏向、冲刺、15 分钟中场休息、下半场换边与 2-4 米 GPS 噪声。",
                     style = MaterialTheme.typography.bodySmall, color = PP.Muted,
                 )
-                Text("踢球位置", style = MaterialTheme.typography.labelLarge)
+                Text("数据类型", style = MaterialTheme.typography.labelLarge)
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    PlayerPosition.entries.forEach { p ->
-                        FilterChip(selected = position == p, onClick = { position = p }, label = { Text(p.label) })
+                    ImportRepository.SimulationKind.entries.forEach { k ->
+                        FilterChip(selected = kind == k, onClick = { kind = k }, label = { Text(k.label) })
+                    }
+                }
+                if (kind != ImportRepository.SimulationKind.PLAIN) {
+                    Text(
+                        "手机放在中线与边线交点，两端共享 1–3 m 偏差和 1–10 分钟慢变误差，各自再叠加独立噪声。" +
+                            if (kind == ImportRepository.SimulationKind.ACCURACY_TEST) "路线按精度测试协议生成（静止 5 分钟、绕边线一圈、中线往返）。" else "",
+                        style = MaterialTheme.typography.labelSmall, color = PP.Muted,
+                    )
+                }
+                if (kind != ImportRepository.SimulationKind.ACCURACY_TEST) {
+                    Text("踢球位置", style = MaterialTheme.typography.labelLarge)
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        PlayerPosition.entries.forEach { p ->
+                            FilterChip(selected = position == p, onClick = { position = p }, label = { Text(p.label) })
+                        }
                     }
                 }
                 Text("球场", style = MaterialTheme.typography.labelLarge)
@@ -338,7 +355,7 @@ private fun SimulationDialog(
             }
         },
         confirmButton = {
-            TextButton(enabled = pitchId != null, onClick = { pitchId?.let { onConfirm(it, position) } }) { Text("生成并入库") }
+            TextButton(enabled = pitchId != null, onClick = { pitchId?.let { onConfirm(it, position, kind) } }) { Text("生成并入库") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
     )

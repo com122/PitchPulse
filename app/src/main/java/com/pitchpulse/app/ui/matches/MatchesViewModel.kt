@@ -86,9 +86,10 @@ class MatchesViewModel(
         return runCatching { thumbnails.get(match.id, pitch, settingsRepository.current()) }.getOrNull()
     }
 
-    fun simulate(pitchId: String, position: PlayerPosition) = runImport("正在生成 90 分钟仿真比赛…") {
-        importRepository.simulate(pitchId, position)
-    }
+    fun simulate(pitchId: String, position: PlayerPosition, kind: ImportRepository.SimulationKind) =
+        runImport(if (kind == ImportRepository.SimulationKind.ACCURACY_TEST) "正在生成精度测试数据…" else "正在生成 90 分钟仿真比赛…") {
+            importRepository.simulate(pitchId, position, kind)
+        }
 
     fun import(uri: Uri) = runImport("正在解析并分析轨迹文件…") {
         importRepository.importUri(uri)

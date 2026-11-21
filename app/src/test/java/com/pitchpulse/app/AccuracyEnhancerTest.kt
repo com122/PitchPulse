@@ -36,16 +36,30 @@ class AccuracyEnhancerTest {
     }
 
     @Test
-    fun `misplaced phone - bias layer is switched off automatically`() {
-        // Phone actually 6 m from the declared known point, shared bias only 0.5 m.
+    fun `slightly misplaced phone - protocol metrics switch the bias layer off`() {
+        // Phone 2.7 m from the declared point (passes the plausibility gate), shared bias only 0.5 m.
         val model = GnssErrorSimulator.Model.shared(Random(12), rmsRange = 0.5..0.8, biasRange = 0.4..0.6)
-        val sc = Scenario.protocol("misplaced", 12, model, phoneOffsetMeters = doubleArrayOf(4.2, 4.2))
+        val sc = Scenario.protocol("misplaced", 12, model, phoneOffsetMeters = doubleArrayOf(1.9, 1.9))
         val r = sc.run().report
         val bias = r.layers.first { it.layer == EnhancementLayer.A_BIAS }
-        println("misplaced: ${bias.reason}")
+        println("misplaced 2.7 m: ${bias.reason}")
         assertFalse("bias layer must be switched off", bias.kept)
         assertTrue(bias.reason.startsWith("自动关闭"))
         assertTrue("final must not be worse than raw", r.final.sidelineP90!! <= r.raw.sidelineP90!! * 1.05)
+    }
+
+    @Test
+    fun `grossly misplaced phone in a match - plausibility gate blocks the bias layer`() {
+        val model = GnssErrorSimulator.Model.shared(Random(27), biasRange = 0.4..0.6)
+        val sc = Scenario.match("misplaced-match", 27, model, phoneOffsetMeters = doubleArrayOf(3.0, 2.8))
+        val out = sc.run()
+        val bias = out.report.layers.first { it.layer == EnhancementLayer.A_BIAS }
+        val raw = sc.rmse(sc.run(layers = emptySet()).track)
+        val auto = sc.rmse(out.track)
+        println("misplaced 4.1 m (match): ${bias.reason}; RMSE raw=%.2f auto=%.2f".format(raw, auto))
+        assertFalse(bias.kept)
+        assertTrue(bias.reason.contains("可能没放在"))
+        assertTrue("auto $auto must not be worse than raw $raw", auto <= raw * 1.05)
     }
 
     @Test

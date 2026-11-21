@@ -13,14 +13,15 @@ enum class RefPlacement(val label: String) {
 }
 
 /** Pitch points a phone can be placed on, in normalised pitch coordinates (see PitchProjector). */
-enum class KnownPoint(val nx: Double, val ny: Double) {
-    CENTER(0.5, 0.5),
-    HALFWAY_TOUCHLINE_A(0.5, 0.0),
-    HALFWAY_TOUCHLINE_B(0.5, 1.0),
-    CORNER_1(0.0, 0.0),
-    CORNER_2(1.0, 0.0),
-    CORNER_3(1.0, 1.0),
-    CORNER_4(0.0, 1.0),
+enum class KnownPoint(val nx: Double, val ny: Double, val label: String) {
+    CENTER(0.5, 0.5, "中圈开球点"),
+    /** Side A = ny 0: the left touchline when facing the bearing direction (the nx = 1 goal). */
+    HALFWAY_TOUCHLINE_A(0.5, 0.0, "中线 × A 侧边线"),
+    HALFWAY_TOUCHLINE_B(0.5, 1.0, "中线 × B 侧边线"),
+    CORNER_1(0.0, 0.0, "角旗 1"),
+    CORNER_2(1.0, 0.0, "角旗 2"),
+    CORNER_3(1.0, 1.0, "角旗 3"),
+    CORNER_4(0.0, 1.0, "角旗 4"),
 }
 
 /**

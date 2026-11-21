@@ -2,6 +2,7 @@ package com.pitchpulse.app.ui.settings
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.pitchpulse.app.data.model.EnhancementSettings
 import com.pitchpulse.app.data.model.UserSettings
 import com.pitchpulse.app.data.repository.MatchRepository
 import com.pitchpulse.app.data.repository.WatchConnectionState
@@ -26,6 +27,18 @@ class SettingsViewModel(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     val watchState: StateFlow<WatchConnectionState> = watchSync.connectionState
+
+    val enhancement: StateFlow<EnhancementSettings?> = settingsRepository.enhancement
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    fun updateEnhancement(transform: (EnhancementSettings) -> EnhancementSettings) {
+        val current = enhancement.value ?: return
+        viewModelScope.launch { settingsRepository.updateEnhancement(transform(current)) }
+    }
+
+    fun resetEnhancement() {
+        viewModelScope.launch { settingsRepository.updateEnhancement(EnhancementSettings()) }
+    }
 
     private val _recompute = MutableStateFlow<Pair<Int, Int>?>(null)
     /** (done, total) while recomputing, null otherwise. */

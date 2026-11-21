@@ -1,7 +1,9 @@
 package com.pitchpulse.app.di
 
 import android.content.Context
+import com.pitchpulse.app.data.file.ReferenceFileStore
 import com.pitchpulse.app.data.file.TrackFileStore
+import com.pitchpulse.app.data.repository.ReferenceRepository
 import com.pitchpulse.app.data.local.AppDatabase
 import com.pitchpulse.app.data.repository.ImportRepository
 import com.pitchpulse.app.data.repository.MatchRepository
@@ -27,8 +29,11 @@ class AppContainer(context: Context) {
         trackStore, pitchRepository, matchRepository, thumbnailRepository, settingsRepository,
     )
 
+    val referenceFileStore = ReferenceFileStore(appContext.filesDir)
+    val referenceRepository = ReferenceRepository(referenceFileStore)
+
     val importRepository = ImportRepository(
         appContext.contentResolver, appContext.cacheDir, trackStore, watchSyncRepository,
-        pitchRepository, settingsRepository,
+        pitchRepository, settingsRepository, referenceRepository,
     )
 }

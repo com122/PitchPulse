@@ -41,6 +41,8 @@ class ReferenceStation private constructor(
     /** Mean of the raw error (known point: the phone's absolute bias). */
     val rawMeanE: Double,
     val rawMeanN: Double,
+    /** Median accuracy (acc) the phone reported for the used fixes, m. */
+    val medianAcc: Double,
 ) {
     val firstT: Long get() = t0
     val lastT: Long get() = t0 + (errE.size - 1) * GRID_MS
@@ -190,6 +192,7 @@ class ReferenceStation private constructor(
                 rawWander95 = wander,
                 rawMeanE = meanE,
                 rawMeanN = meanN,
+                medianAcc = SignalFilters.median(usable.map { it.acc.toDouble() }.toDoubleArray()),
             )
         }
     }

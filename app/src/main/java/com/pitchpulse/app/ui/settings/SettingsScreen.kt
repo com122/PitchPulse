@@ -57,7 +57,8 @@ import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(viewModel: SettingsViewModel) {
+fun SettingsScreen(viewModel: SettingsViewModel, onOpenReference: () -> Unit) {
+    val enhancement by viewModel.enhancement.collectAsStateWithLifecycle()
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val watch by viewModel.watchState.collectAsStateWithLifecycle()
     val recompute by viewModel.recompute.collectAsStateWithLifecycle()
@@ -132,6 +133,10 @@ fun SettingsScreen(viewModel: SettingsViewModel) {
                     }
                     TextButton(onClick = viewModel::reset) { Text("恢复默认") }
                 }
+            }
+
+            enhancement?.let { e ->
+                EnhancementSettingsCard(e, viewModel::updateEnhancement, viewModel::resetEnhancement, onOpenReference)
             }
 
             WatchCard(watch)

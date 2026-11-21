@@ -78,7 +78,12 @@ class AccuracyEnhancer(
     private val settings: EnhancementSettings,
     private val stats: MatchStatsCalculator,
 ) {
-    data class Reference(val meta: ReferenceSessionMeta, val fixes: List<ReferenceFix>)
+    data class Reference(
+        val meta: ReferenceSessionMeta,
+        val fixes: List<ReferenceFix>,
+        /** Parsed raw GNSS log (only loaded when Tier B is enabled). */
+        val raw: com.pitchpulse.app.domain.gnss.RawLogSummary? = null,
+    )
 
     data class Output(
         /** Enhanced in-play points for stats / heatmap (p != 0), same contract as the raw pipeline. */
@@ -229,13 +234,23 @@ class AccuracyEnhancer(
         fun decide(layer: EnhancementLayer, requested: Boolean, applicable: Boolean, reason: String) {
             decisions[layer] = LayerDecision(layer, requested, applicable, requested && applicable, reason)
         }
+        // Plausibility: the long-term mean error of a static phone should not exceed its own
+        // reported 68 % accuracy. A larger mean almost always means the phone is not on the point
+        // the user selected (or the pitch calibration is off), and shifting the watch by it would
+        // add, not remove, error. Catches gross misplacement (≳ 3 m); smaller ones need the
+        // accuracy-test protocol.
+        val biasMagnitude = estimate?.let { hypot(it.biasE, it.biasN) } ?: 0.0
+        val biasLimit = station?.let { maxOf(MIN_BIAS_LIMIT, it.medianAcc) } ?: MIN_BIAS_LIMIT
+        val biasPlausible = biasMagnitude <= biasLimit
         decide(
             EnhancementLayer.A_BIAS, settings.tierA,
-            estimate != null && estimate.kB > 0,
+            estimate != null && estimate.kB > 0 && biasPlausible,
             when {
                 !settings.tierA -> "已在设置中关闭"
                 station == null -> "没有可用的参考站数据"
                 !knownRef -> "参考站放在未知点，绝对偏差不可观测"
+                !biasPlausible -> "参考站平均偏差 ${"%.1f".format(biasMagnitude)} m 超过手机自报精度 ${"%.1f".format(biasLimit)} m：" +
+                    "手机可能没放在「${station.meta.knownPoint?.label}」上，或球场标定有偏移，不做绝对改正"
                 else -> "已知点偏差 b = (${"%.2f".format(estimate!!.biasE)}, ${"%.2f".format(estimate.biasN)}) m，K_b = ${"%.1f".format(estimate.kB)}"
             },
         )
@@ -326,11 +341,16 @@ class AccuracyEnhancer(
         return Output(finalVersion.clean, finalVersion.eval, report)
     }
 
-    private fun tierBStatus(reference: Reference?, points: List<TrackPoint>): String = when {
-        !settings.tierB -> "未启用（实验功能，需在设置中打开）"
-        reference == null -> "没有参考站数据"
-        !reference.meta.hasMeasurements -> "参考站手机不支持 GNSS 原始观测"
-        else -> "手表轨迹不含伪距原始观测（Wear OS Health Services 只提供位置结果），伪距差分不可用"
+    companion object {
+        /** Lower bound of the bias plausibility limit, m. */
+        const val MIN_BIAS_LIMIT = 3.0
+    }
+
+    /** The watch contract carries positions only; raw pseudoranges would need a separate rover log. */
+    @Suppress("UNUSED_PARAMETER")
+    private fun tierBStatus(reference: Reference?, points: List<TrackPoint>): String {
+        if (settings.tierB && reference != null && !reference.meta.hasMeasurements) return "参考站手机不支持或未记录 GNSS 原始观测"
+        return com.pitchpulse.app.domain.gnss.DgnssAvailability.check(settings.tierB, reference?.raw, roverHasRaw = false).reason
     }
 
     /**

@@ -34,6 +34,8 @@ import com.pitchpulse.app.ui.pitches.PitchCalibrationScreen
 import com.pitchpulse.app.ui.pitches.PitchCalibrationViewModel
 import com.pitchpulse.app.ui.pitches.PitchesScreen
 import com.pitchpulse.app.ui.pitches.PitchesViewModel
+import com.pitchpulse.app.ui.reference.ReferenceStationScreen
+import com.pitchpulse.app.ui.reference.ReferenceStationViewModel
 import com.pitchpulse.app.ui.settings.SettingsScreen
 import com.pitchpulse.app.ui.settings.SettingsViewModel
 import com.pitchpulse.app.ui.theme.PP
@@ -42,6 +44,7 @@ private object Routes {
     const val MATCHES = "matches"
     const val PITCHES = "pitches"
     const val SETTINGS = "settings"
+    const val REFERENCE = "reference"
     const val DETAIL = "match/{matchId}"
     const val CALIBRATE = "pitch/edit?pitchId={pitchId}"
 
@@ -118,7 +121,13 @@ fun PitchPulseNavHost(container: AppContainer) {
                         SettingsViewModel(container.settingsRepository, container.matchRepository, container.watchSyncRepository)
                     }
                 })
-                SettingsScreen(vm)
+                SettingsScreen(vm, onOpenReference = { nav.navigate(Routes.REFERENCE) })
+            }
+            composable(Routes.REFERENCE) {
+                val vm: ReferenceStationViewModel = viewModel(factory = viewModelFactory {
+                    initializer { ReferenceStationViewModel(container.pitchRepository, container.referenceRepository) }
+                })
+                ReferenceStationScreen(vm, onBack = { nav.popBackStack() })
             }
             composable(
                 Routes.DETAIL,
@@ -130,6 +139,7 @@ fun PitchPulseNavHost(container: AppContainer) {
                         MatchDetailViewModel(
                             matchId, container.appContext,
                             container.matchRepository, container.pitchRepository, container.settingsRepository,
+                            container.referenceRepository,
                         )
                     }
                 })

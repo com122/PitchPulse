@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.pitchpulse.app.data.export.ReportExporter
+import com.pitchpulse.app.data.model.EnhancementSettings
 import com.pitchpulse.app.data.model.MatchRecord
 import com.pitchpulse.app.data.model.MatchStats
 import com.pitchpulse.app.data.model.PitchConfig
@@ -12,7 +13,10 @@ import com.pitchpulse.app.data.model.TrackPoint
 import com.pitchpulse.app.data.model.UserSettings
 import com.pitchpulse.app.data.repository.MatchRepository
 import com.pitchpulse.app.data.repository.PitchRepository
+import com.pitchpulse.app.data.repository.ReferenceRepository
 import com.pitchpulse.app.data.settings.SettingsRepository
+import com.pitchpulse.app.domain.algorithm.AccuracyEnhancer
+import com.pitchpulse.app.domain.algorithm.AccuracyReport
 import com.pitchpulse.app.domain.algorithm.HeatmapGenerator
 import com.pitchpulse.app.domain.algorithm.MatchAnalysis
 import com.pitchpulse.app.domain.algorithm.MatchStatsCalculator
@@ -37,6 +41,8 @@ enum class MatchSegment(val label: String, val phase: Int?) {
 
 enum class PitchLayer(val label: String) { HEATMAP("热区图"), TRACK("跑动轨迹线"), SPRINTS("高速冲刺点") }
 
+enum class TrackMode(val label: String) { RAW("原始"), ENHANCED("增强") }
+
 data class MatchDetailUiState(
     val loading: Boolean = true,
     val error: String? = null,
@@ -55,6 +61,15 @@ data class MatchDetailUiState(
     /** Full-match stats (for the 5-minute chart). */
     val fullStats: MatchStats = MatchStats(),
     val exporting: Boolean = false,
+    val mode: TrackMode = TrackMode.ENHANCED,
+    /** Accuracy-enhancement result; null while computing or when it failed. */
+    val report: AccuracyReport? = null,
+    val enhancementError: String? = null,
+    /** Raw full-match stats, to show the difference in the report card. */
+    val rawFullStats: MatchStats = MatchStats(),
+    val enhancedFullStats: MatchStats? = null,
+    /** Reference-station coverage of this match (0..1), null when none overlaps. */
+    val referenceOverlap: Double? = null,
 )
 
 sealed interface DetailEvent {
@@ -68,6 +83,7 @@ class MatchDetailViewModel(
     private val matchRepository: MatchRepository,
     private val pitchRepository: PitchRepository,
     private val settingsRepository: SettingsRepository,
+    private val referenceRepository: ReferenceRepository,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(MatchDetailUiState())
@@ -77,44 +93,95 @@ class MatchDetailViewModel(
     val events = _events.receiveAsFlow()
 
     private var points: List<TrackPoint>? = null
-    private var analyses: Map<MatchSegment, MatchAnalysis> = emptyMap()
-    private var analysisKey: Any? = null
+    private var rawAnalyses: Map<MatchSegment, MatchAnalysis> = emptyMap()
+    private var enhancedAnalyses: Map<MatchSegment, MatchAnalysis>? = null
+    private var rawKey: Any? = null
+    private var enhancedKey: Any? = null
     private var renderJob: Job? = null
+    private var modeChosen = false
+
+    private data class Inputs(
+        val match: MatchRecord?,
+        val pitch: PitchConfig?,
+        val settings: UserSettings,
+        val enhancement: EnhancementSettings,
+        val sessionsVersion: Int,
+    )
 
     init {
+        viewModelScope.launch { referenceRepository.refresh() }
         viewModelScope.launch {
             combine(
                 matchRepository.observeMatch(matchId),
                 pitchRepository.observePitches(),
                 settingsRepository.settings,
-            ) { m, pitches, s -> Triple(m, pitches.firstOrNull { it.id == m?.pitchId }, s) }
-                .collect { (match, pitch, settings) ->
-                    if (match == null) {
-                        if (!_state.value.loading || _state.value.match != null) return@collect
-                        _state.update { it.copy(loading = false, error = "比赛不存在或已被删除") }
-                        return@collect
-                    }
-                    _state.update { it.copy(match = match, pitch = pitch, settings = settings) }
-                    try {
-                        ensureAnalyses(settings)
-                        rerender()
-                    } catch (e: Exception) {
-                        _state.update { it.copy(loading = false, error = "轨迹读取失败：${e.message}") }
-                    }
+                settingsRepository.enhancement,
+                referenceRepository.sessions,
+            ) { m, pitches, s, e, sessions ->
+                Inputs(m, pitches.firstOrNull { it.id == m?.pitchId }, s, e, sessions.hashCode())
+            }.collect { inputs ->
+                val match = inputs.match
+                if (match == null) {
+                    if (!_state.value.loading || _state.value.match != null) return@collect
+                    _state.update { it.copy(loading = false, error = "比赛不存在或已被删除") }
+                    return@collect
                 }
+                if (!modeChosen) {
+                    modeChosen = true
+                    _state.update { it.copy(mode = if (inputs.enhancement.defaultEnhanced) TrackMode.ENHANCED else TrackMode.RAW) }
+                }
+                _state.update { it.copy(match = match, pitch = inputs.pitch, settings = inputs.settings) }
+                try {
+                    ensureRaw(inputs.settings)
+                    rerender()
+                    if (inputs.pitch != null) ensureEnhanced(match, inputs.pitch, inputs.settings, inputs.enhancement, inputs.sessionsVersion)
+                    rerender()
+                } catch (e: Exception) {
+                    _state.update { it.copy(loading = false, error = "轨迹读取失败：${e.message}") }
+                }
+            }
         }
     }
 
-    private suspend fun ensureAnalyses(settings: UserSettings) {
+    private suspend fun ensureRaw(settings: UserSettings) {
         val pts = points ?: matchRepository.loadTrack(matchId).also { points = it }
         if (pts.isEmpty()) throw IllegalStateException("轨迹文件为空")
         val key = MatchStatsCalculator.Config.from(settings)
-        if (key == analysisKey) return
-        analyses = withContext(Dispatchers.Default) {
+        if (key == rawKey) return
+        rawAnalyses = withContext(Dispatchers.Default) {
             val calc = MatchStatsCalculator(key)
             MatchSegment.entries.associateWith { calc.analyze(pts, it.phase) }
         }
-        analysisKey = key
+        rawKey = key
+        _state.update { it.copy(rawFullStats = rawAnalyses.getValue(MatchSegment.FULL).stats) }
+    }
+
+    /** Runs the accuracy layers on Dispatchers.Default; raw data is untouched. */
+    private suspend fun ensureEnhanced(match: MatchRecord, pitch: PitchConfig, settings: UserSettings, enh: EnhancementSettings, sessionsVersion: Int) {
+        val pts = points ?: return
+        val key = listOf(MatchStatsCalculator.Config.from(settings), enh, pitch, sessionsVersion)
+        if (key == enhancedKey) return
+        enhancedKey = key
+        try {
+            val candidate = referenceRepository.bestFor(match.startTime, match.endTime, pitch.id)
+            val reference = candidate?.let { referenceRepository.load(it.meta.id, includeRaw = enh.tierB) }
+            val calc = MatchStatsCalculator(MatchStatsCalculator.Config.from(settings))
+            val out = withContext(Dispatchers.Default) { AccuracyEnhancer(enh, calc).run(pts, pitch, reference) }
+            enhancedAnalyses = withContext(Dispatchers.Default) {
+                MatchSegment.entries.associateWith { calc.analyzeFromClean(pts, out.clean, it.phase) }
+            }
+            _state.update {
+                it.copy(
+                    report = out.report,
+                    enhancementError = null,
+                    enhancedFullStats = enhancedAnalyses!!.getValue(MatchSegment.FULL).stats,
+                    referenceOverlap = candidate?.overlap,
+                )
+            }
+        } catch (e: Exception) {
+            enhancedAnalyses = null
+            _state.update { it.copy(report = null, enhancementError = "精度增强失败：${e.message ?: e.javaClass.simpleName}", enhancedFullStats = null) }
+        }
     }
 
     fun selectSegment(segment: MatchSegment) {
@@ -131,6 +198,11 @@ class MatchDetailViewModel(
         _state.update { it.copy(layer = layer) }
     }
 
+    fun selectMode(mode: TrackMode) {
+        _state.update { it.copy(mode = mode) }
+        rerender()
+    }
+
     /** Re-projects the selected segment and regenerates the heatmap on Dispatchers.Default. */
     private fun rerender() {
         val s = _state.value
@@ -138,8 +210,10 @@ class MatchDetailViewModel(
             _state.update { it.copy(loading = false, error = "该比赛关联的球场不存在，请在「球场」页重新标定") }
             return
         }
-        val analysis = analyses[s.segment] ?: return
-        val full = analyses[MatchSegment.FULL] ?: return
+        // Enhanced view falls back to raw until the enhancement is ready (or if it failed).
+        val source = if (s.mode == TrackMode.ENHANCED) enhancedAnalyses ?: rawAnalyses else rawAnalyses
+        val analysis = source[s.segment] ?: return
+        val full = source[MatchSegment.FULL] ?: return
         renderJob?.cancel()
         renderJob = viewModelScope.launch {
             _state.update { it.copy(rendering = true) }
@@ -174,12 +248,13 @@ class MatchDetailViewModel(
         viewModelScope.launch {
             _state.update { it.copy(exporting = true) }
             try {
+                val modeLabel = if (s.mode == TrackMode.ENHANCED && enhancedAnalyses != null) "增强轨迹" else "原始轨迹"
                 val bmp = ReportExporter.render(
                     ReportExporter.Input(
                         match = match,
                         pitch = pitch,
                         stats = s.stats.copy(segments = s.fullStats.segments),
-                        segmentLabel = s.segment.label,
+                        segmentLabel = "${s.segment.label} · $modeLabel",
                         swapEnabled = s.swapSecondHalf,
                         heatmap = s.heatmap,
                         sprintThresholdKmh = s.settings.sprintSpeedMs * 3.6f,

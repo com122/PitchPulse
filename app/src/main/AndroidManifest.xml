@@ -8,6 +8,17 @@
         android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28" />
 
+    <!-- Reference-station mode: the phone records its own GNSS fixes (GPS_PROVIDER, 1 Hz) while it
+         sits at the pitch, in a foreground service so recording continues with the screen off. -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <!-- Android 13+: the ongoing "recording" notification of the foreground service. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <uses-feature android:name="android.hardware.location.gps" android:required="false" />
+
     <application
         android:name=".PitchPulseApp"
         android:allowBackup="true"
@@ -26,5 +37,10 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <service
+            android:name=".service.ReferenceStationService"
+            android:exported="false"
+            android:foregroundServiceType="location" />
     </application>
 </manifest>
